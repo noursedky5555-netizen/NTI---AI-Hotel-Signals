@@ -1,7 +1,7 @@
 import pandas as pd
 
-from data import clean_data
-from models import prepare_prediction_input, predict_cancellation_risk
+from app.data import clean_data
+from app.models import prepare_prediction_input, predict_cancellation_risk
 
 
 def test_prepare_features_removes_nan():

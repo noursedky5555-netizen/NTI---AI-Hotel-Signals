@@ -4,15 +4,15 @@ PAGE_TITLE = "Hotel Signals"
 PAGE_ICON = "H"
 
 COLORS = {
-    "ink": "#17221F",
-    "muted": "#64726D",
-    "paper": "#F6F4EE",
-    "panel": "#FFFDF8",
-    "line": "#D8DED7",
-    "coral": "#D9654D",
-    "teal": "#2D766B",
-    "gold": "#C69745",
-    "blue": "#5685A3",
+    "ink": "#19332F",
+    "muted": "#63746D",
+    "paper": "#EEF3EF",
+    "panel": "#FFFFFF",
+    "line": "#CBD8D1",
+    "coral": "#C95F4A",
+    "teal": "#1F766B",
+    "gold": "#B88A3E",
+    "blue": "#6E9C92",
 }
 
 REQUIRED_COLUMNS = {

@@ -9,12 +9,12 @@ from typing import Any
 import pandas as pd
 from sklearn.cluster import KMeans
 from sklearn.dummy import DummyRegressor
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, RandomForestRegressor
+from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor, RandomForestClassifier, RandomForestRegressor
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LinearRegression, LogisticRegression
-from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, precision_score, r2_score, recall_score
+from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, mean_squared_error, precision_score, r2_score, recall_score
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
@@ -149,7 +149,7 @@ def _trained_cancellation_model(csv_path: str, modified_ns: int) -> Pipeline:
 
 
 def predict_cancellation_risk(raw: dict[str, Any]) -> float:
-    csv_path = Path(__file__).with_name("hotel_bookings_updated_2024.csv")
+    csv_path = Path(__file__).resolve().parents[1] / "data" / "hotel_bookings_updated_2024.csv"
     model = _trained_cancellation_model(str(csv_path), csv_path.stat().st_mtime_ns)
     single = prepare_prediction_input(raw)
     probability = model.predict_proba(single[NUMERIC_COLUMNS + CATEGORICAL_COLUMNS])[0][1]
@@ -185,27 +185,70 @@ def regression_report(data: pd.DataFrame) -> pd.DataFrame:
 
 
 def model_comparison(data: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    classification_features, classification_target = prepare_features(data)
-    classification_features = _prepare_numeric_frame(classification_features)
+    """Compare multiple classification and regression models using shared preprocessing.
+    
+    This function applies the project's configured preprocessing and model training
+    to ensure consistent results.
+    """
+    # Classification: prepare the configured feature set.
+    classification_frame = data.copy()
+    
+    # Handle missing values for specific columns.
+    for column, value in [("agent", 0), ("company", 0), ("country", "Unknown")]:
+        if column in classification_frame:
+            classification_frame[column] = classification_frame[column].fillna(value)
+    
+    # Drop data leakage columns
+    classification_frame = classification_frame.drop(
+        columns=["reservation_status", "reservation_status_date"],
+        errors="ignore",
+    )
+    
+    # Convert categorical columns to numeric using get_dummies.
+    classification_frame = pd.get_dummies(
+        classification_frame,
+        columns=classification_frame.select_dtypes(include="object").columns,
+        drop_first=True,
+    )
+    
+    # Prepare features and target
+    classification_features = classification_frame.drop(columns=["is_canceled"])
+    classification_target = classification_frame["is_canceled"]
+    
+    # Train/test split with stratification.
     train_x, test_x, train_y, test_y = train_test_split(
         classification_features,
         classification_target,
-        test_size=0.25,
+        test_size=0.2,
         random_state=42,
         stratify=classification_target,
     )
+    
+    # Scale features for models that need it
+    scaler = StandardScaler()
+    train_x_scaled = scaler.fit_transform(train_x)
+    test_x_scaled = scaler.transform(test_x)
+    
+    # Classification models.
     classifiers = {
-        "Logistic Regression": LogisticRegression(max_iter=250, solver="liblinear", random_state=42),
-        "Decision Tree": DecisionTreeClassifier(max_depth=10, random_state=42),
-        "Random Forest": RandomForestClassifier(n_estimators=60, max_depth=10, random_state=42, n_jobs=1),
-        "KNN": Pipeline([("scaler", StandardScaler()), ("classifier", KNeighborsClassifier(n_neighbors=7, n_jobs=1))]),
-        "Gradient Boosting": GradientBoostingClassifier(n_estimators=80, max_depth=3, random_state=42),
-        "XGBoost": XGBClassifier(n_estimators=80, max_depth=4, learning_rate=0.08, subsample=0.9, colsample_bytree=0.9, random_state=42, n_jobs=1, eval_metric="logloss"),
+        "Logistic Regression": LogisticRegression(max_iter=1000, random_state=42),
+        "Decision Tree": DecisionTreeClassifier(random_state=42),
+        "Random Forest": RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1),
+        "KNN": KNeighborsClassifier(n_neighbors=5),
+        "Gradient Boosting": GradientBoostingClassifier(n_estimators=100, random_state=42),
+        "XGBoost": XGBClassifier(n_estimators=100, random_state=42, eval_metric="logloss"),
     }
+    
     classification_rows = []
     for name, model in classifiers.items():
-        model.fit(train_x, train_y)
-        prediction = model.predict(test_x)
+        # Use scaled data for Logistic Regression and KNN.
+        use_scaled = name in {"Logistic Regression", "KNN"}
+        fit_x = train_x_scaled if use_scaled else train_x
+        pred_x = test_x_scaled if use_scaled else test_x
+        
+        model.fit(fit_x, train_y)
+        prediction = model.predict(pred_x)
+        
         classification_rows.append({
             "Model": name,
             "Accuracy": accuracy_score(test_y, prediction),
@@ -213,38 +256,77 @@ def model_comparison(data: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
             "Recall": recall_score(test_y, prediction, zero_division=0),
             "F1 score": f1_score(test_y, prediction),
         })
-
-    regression_features, regression_target = prepare_features(data, target="adr")
-    regression_features = _prepare_numeric_frame(regression_features)
+    
+    # Regression: prepare the configured feature set.
+    regression_frame = classification_frame.copy()
+    regression_features = regression_frame.drop(columns=["adr"])
+    regression_target = regression_frame["adr"]
+    
+    # Remove negative ADR values.
+    valid = regression_target >= 0
+    regression_features = regression_features[valid]
+    regression_target = regression_target[valid]
+    
+    # Train/test split
     train_x, test_x, train_y, test_y = train_test_split(
         regression_features,
         regression_target,
-        test_size=0.25,
+        test_size=0.2,
         random_state=42,
     )
+    
+    # Scale features for linear regression
+    regression_scaler = StandardScaler()
+    train_x_scaled = regression_scaler.fit_transform(train_x)
+    test_x_scaled = regression_scaler.transform(test_x)
+    
+    # Regression models.
     regressors = {
-        "Mean baseline": DummyRegressor(strategy="mean"),
-        "Linear regression": LinearRegression(),
-        "Random forest": RandomForestRegressor(n_estimators=40, random_state=42, n_jobs=1),
+        "Linear Regression": (LinearRegression(), True),  # Uses scaling
+        "Decision Tree": (DecisionTreeRegressor(random_state=42), False),
+        "Random Forest": (RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1), False),
+        "Gradient Boosting": (GradientBoostingRegressor(n_estimators=100, random_state=42), False),
     }
+    
     regression_rows = []
-    for name, model in regressors.items():
-        model.fit(train_x, train_y)
-        prediction = model.predict(test_x)
+    for name, (model, use_scaling) in regressors.items():
+        fit_x = train_x_scaled if use_scaling else train_x
+        pred_x = test_x_scaled if use_scaling else test_x
+        
+        model.fit(fit_x, train_y)
+        prediction = model.predict(pred_x)
+        
         regression_rows.append({
             "Model": name,
             "MAE": mean_absolute_error(test_y, prediction),
+            "RMSE": mean_squared_error(test_y, prediction) ** 0.5,
             "R2": r2_score(test_y, prediction),
         })
+    
     return pd.DataFrame(classification_rows), pd.DataFrame(regression_rows)
 
 
 def cluster_data(data: pd.DataFrame, clusters: int = 4) -> tuple[pd.DataFrame, float]:
+    """Cluster hotel booking data using K-Means with configured preprocessing."""
+    # Select clustering features.
     columns = ["lead_time", "total_stay_nights", "adr", "total_guests", "total_of_special_requests"]
     source = data[columns].copy()
-    source = source.apply(lambda col: pd.to_numeric(col, errors="coerce").fillna(col.median()))
-    scaled = StandardScaler().fit_transform(source)
+    
+    # Convert to numeric and handle missing values using median
+    for col in source.columns:
+        source[col] = pd.to_numeric(source[col], errors="coerce")
+        source[col] = source[col].fillna(source[col].median())
+    
+    # Scale features
+    scaler = StandardScaler()
+    scaled = scaler.fit_transform(source)
+    
+    # Fit K-Means with configured settings.
     model = KMeans(n_clusters=clusters, random_state=42, n_init=10)
+    cluster_labels = model.fit_predict(scaled)
+    
+    # Add cluster assignments to result
     result = data.copy()
-    result["cluster"] = model.fit_predict(scaled)
+    result["cluster"] = cluster_labels
+    
     return result, float(model.inertia_)

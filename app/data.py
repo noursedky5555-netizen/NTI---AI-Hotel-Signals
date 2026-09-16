@@ -50,13 +50,43 @@ def clean_data(frame: pd.DataFrame) -> pd.DataFrame:
     for column in REQUIRED_COLUMNS:
         if column not in data.columns:
             raise ValueError(f"Missing required column: {column}")
+    
+    # Remove columns that contain only zeros
+    data = data.loc[:, (data != 0).any(axis=0)]
+    
+    # Handle missing values for specific columns
+    if "agent" in data.columns:
+        data["agent"] = data["agent"].fillna(0)
+    if "company" in data.columns:
+        data["company"] = data["company"].fillna(0)
+    if "country" in data.columns:
+        data["country"] = data["country"].fillna("Unknown")
+    
+    # Handle numeric columns
     for column in ["adults", "children", "babies", "lead_time", "adr", "total_of_special_requests"]:
         data[column] = pd.to_numeric(data[column], errors="coerce").fillna(0)
+    
+    data["adr"] = data["adr"].clip(lower=0)
+
+    # Ensure children is non-negative
     data["children"] = data["children"].clip(lower=0)
+    
+    # Create derived features
     data["total_guests"] = data["adults"] + data["children"] + data["babies"]
     data["total_stay_nights"] = data["stays_in_weekend_nights"] + data["stays_in_week_nights"]
-    data = data[(data["total_guests"] > 0) & (data["total_stay_nights"] > 0)].copy()
+    
+    # Remove invalid bookings (0 guests)
+    data = data[data["total_guests"] > 0].copy()
+    
+    # Ensure target column is properly typed
     data["is_canceled"] = data["is_canceled"].astype(int)
+    
+    # Drop data leakage columns if they exist
+    data = data.drop(
+        columns=[col for col in ["reservation_status", "reservation_status_date"] if col in data.columns],
+        errors="ignore"
+    )
+    
     return data.reset_index(drop=True)
 
 
